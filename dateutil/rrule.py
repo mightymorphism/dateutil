@@ -1505,6 +1505,27 @@ class _rrulestr(object):
                 raise ValueError("invalid '%s': %s" % (name, value))
         return rrule(dtstart=dtstart, cache=cache, **rrkwargs)
 
+
+    def _parse_tzid(self, TZID_NAMES, tzids, parm):
+        try:
+            tzkey = TZID_NAMES[parm.split('TZID=')[-1]]
+        except KeyError as e:
+            return None
+        if tzids is None:
+            from . import tz
+            tzlookup = tz.gettz
+        elif callable(tzids):
+            tzlookup = tzids
+        else:
+            tzlookup = getattr(tzids, 'get', None)
+            if tzlookup is None:
+                msg = ('tzids must be a callable, ' +
+                       'mapping, or None, ' +
+                       'not %s' % tzids)
+                raise ValueError(msg)
+
+        return tzlookup(tzkey)
+
     def _parse_rfc(self, s,
                    dtstart=None,
                    cache=False,
@@ -1569,18 +1590,22 @@ class _rrulestr(object):
                     rrulevals.append(value)
                 elif name == "RDATE":
                     for parm in parms:
+                        if parm.startswith("TZID="):
+                            continue
                         if parm != "VALUE=DATE-TIME":
                             raise ValueError("unsupported RDATE parm: "+parm)
-                    rdatevals.append(value)
+                    rdatevals.append([value, parms])
                 elif name == "EXRULE":
                     for parm in parms:
                         raise ValueError("unsupported EXRULE parm: "+parm)
                     exrulevals.append(value)
                 elif name == "EXDATE":
                     for parm in parms:
+                        if parm.startswith("TZID="):
+                            continue
                         if parm != "VALUE=DATE-TIME":
                             raise ValueError("unsupported EXDATE parm: "+parm)
-                    exdatevals.append(value)
+                    exdatevals.append([value, parms])
                 elif name == "DTSTART":
                     # RFC 5445 3.8.2.4: The VALUE parameter is optional, but
                     # may be found only once.
@@ -1589,24 +1614,7 @@ class _rrulestr(object):
                     valid_values = {"VALUE=DATE-TIME", "VALUE=DATE"}
                     for parm in parms:
                         if parm.startswith("TZID="):
-                            try:
-                                tzkey = TZID_NAMES[parm.split('TZID=')[-1]]
-                            except KeyError:
-                                continue
-                            if tzids is None:
-                                from . import tz
-                                tzlookup = tz.gettz
-                            elif callable(tzids):
-                                tzlookup = tzids
-                            else:
-                                tzlookup = getattr(tzids, 'get', None)
-                                if tzlookup is None:
-                                    msg = ('tzids must be a callable, ' +
-                                           'mapping, or None, ' +
-                                           'not %s' % tzids)
-                                    raise ValueError(msg)
-
-                            TZID = tzlookup(tzkey)
+                            TZID = self._parse_tzid(TZID_NAMES, tzids, parm)
                             continue
                         if parm not in valid_values:
                             raise ValueError("unsupported DTSTART parm: "+parm)
@@ -1636,20 +1644,38 @@ class _rrulestr(object):
                     rset.rrule(self._parse_rfc_rrule(value, dtstart=dtstart,
                                                      ignoretz=ignoretz,
                                                      tzinfos=tzinfos))
-                for value in rdatevals:
+                for value, parms in rdatevals:
+                    TZID = None
+                    for parm in parms:
+                        if parm.startswith("TZID="):
+                            TZID = self._parse_tzid(TZID_NAMES, tzids, parm)
+                            continue
                     for datestr in value.split(','):
-                        rset.rdate(parser.parse(datestr,
-                                                ignoretz=ignoretz,
-                                                tzinfos=tzinfos))
+                        d = parser.parse(datestr,
+                                         ignoretz=ignoretz,
+                                         tzinfos=tzinfos)
+                        if TZID is not None:
+                            if d.tzinfo is None:
+                                d = d.replace(tzinfo=TZID)
+                        rset.rdate(d)
                 for value in exrulevals:
                     rset.exrule(self._parse_rfc_rrule(value, dtstart=dtstart,
                                                       ignoretz=ignoretz,
                                                       tzinfos=tzinfos))
-                for value in exdatevals:
+                for value, parms in exdatevals:
+                    TZID = None
+                    for parm in parms:
+                        if parm.startswith("TZID="):
+                            TZID = self._parse_tzid(TZID_NAMES, tzids, parm)
+                            continue
                     for datestr in value.split(','):
-                        rset.exdate(parser.parse(datestr,
-                                                 ignoretz=ignoretz,
-                                                 tzinfos=tzinfos))
+                        d = parser.parse(datestr,
+                                         ignoretz=ignoretz,
+                                         tzinfos=tzinfos)
+                        if TZID is not None:
+                            if d.tzinfo is None:
+                                d = d.replace(tzinfo=TZID)
+                        rset.exdate(d)
                 if compatible and dtstart:
                     rset.rdate(dtstart)
                 return rset
